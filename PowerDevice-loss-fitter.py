@@ -6,10 +6,10 @@ from scipy.optimize import curve_fit
 from PIL import Image
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-st.set_page_config(page_title="Power Device Loss Fitter Pro", layout="wide")
+st.set_page_config(page_title="Power Device Loss Fitter - R&D Pro", layout="wide")
 
 # ==========================================
-# 核心定義：曲線類別
+# 核心定義：曲線類別 (封裝計算邏輯)
 # ==========================================
 class PowerLossCurve:
     def __init__(self, name, model_type="Method_SW3"):
@@ -23,18 +23,19 @@ class PowerLossCurve:
         self.params = params
 
     def get_loss(self, current_i):
-        """根據論文(8)式代入電流計算損耗"""
+        """計算瞬時損耗/電壓 (支援負電流處理)"""
         if self.params is None: return 0.0
+        i = abs(current_i) # 損耗通常基於電流絕對值
         if self.model_type == "Method_SW3":
             # E = A + B*i + C*i^2
             A, B, C = self.params
-            return A + B * current_i + C * (current_i ** 2)
+            return A + B * i + C * (i ** 2)
         elif self.model_type == "Linear":
             v0, r = self.params
-            return v0 + r * current_i
+            return v0 + r * i
         elif self.model_type == "Power":
             a, b = self.params
-            return a * (current_i ** b)
+            return a * (i ** b)
         return 0.0
 
     def get_equation_string(self):
@@ -56,17 +57,17 @@ if "current_curve_name" not in st.session_state:
 if "calib_pts" not in st.session_state:
     st.session_state.calib_pts = [] 
 
-st.title("⚡ Power Device Loss Evaluator (Pro Version)")
+st.title("⚡ Power Device Loss Evaluator (R&D Pro Version)")
 
 # ==========================================
-# Sidebar 曲線管理
+# Sidebar 控制區
 # ==========================================
-st.sidebar.header("🛠️ 1. 曲線與標定管理")
+st.sidebar.header("🛠️ 1. 曲線管理")
 
-new_name = st.sidebar.text_input("輸入新曲線名稱 (如 Eon, Eoff, Err)", value=f"Curve_{len(st.session_state.curve_objects) + 1}")
-model_choice = st.sidebar.selectbox("選擇擬合模型", ["Method_SW3", "Linear", "Power"])
+new_name = st.sidebar.text_input("新曲線名稱 (如 Eon, Eoff, Err)", value=f"Curve_{len(st.session_state.curve_objects) + 1}")
+model_choice = st.sidebar.selectbox("擬合模型", ["Method_SW3", "Linear", "Power"])
 
-if st.sidebar.button("➕ 新增曲線檔案"):
+if st.sidebar.button("➕ 新增曲線"):
     if new_name not in st.session_state.curve_objects:
         st.session_state.curve_objects[new_name] = PowerLossCurve(name=new_name, model_type=model_choice)
         st.session_state.current_curve_name = new_name
@@ -79,13 +80,13 @@ if all_names:
     selected_name = st.sidebar.selectbox("切換編輯對象", all_names, index=all_names.index(st.session_state.current_curve_name))
     st.session_state.current_curve_name = selected_name
     current_obj = st.session_state.curve_objects[selected_name]
-    if st.sidebar.button("🗑️ 刪除目前選中的曲線", use_container_width=True):
+    if st.sidebar.button("🗑️ 刪除選中曲線"):
         del st.session_state.curve_objects[selected_name]
         remaining = list(st.session_state.curve_objects.keys())
         st.session_state.current_curve_name = remaining[0] if remaining else None
         st.rerun()
 else:
-    st.info("👈 請先新增曲線。")
+    st.info("👈 請先新增曲線檔案。")
     st.stop()
 
 if st.sidebar.button("🔄 重置座標標定 (換圖用)"):
@@ -104,8 +105,13 @@ if uploaded_file:
 
     with col1:
         st.subheader(f"📍 編輯中: {current_obj.name}")
-        if len(st.session_state.calib_pts) < 2:
-            st.warning("請先完成兩點標定：(0,0) 與 (Max, Max)")
+        if len(st.session_state.calib_pts) == 0:
+            st.warning("請點擊圖表【左下角原點 (0,0)】")
+        elif len(st.session_state.calib_pts) == 1:
+            st.warning("請點擊圖表【右上方最大刻度點】")
+        else:
+            st.success("標定完成！點擊曲線擷取數據點。")
+        
         value = streamlit_image_coordinates(img, key="img_click")
         if value:
             curr_pt = (value["x"], value["y"])
@@ -116,14 +122,16 @@ if uploaded_file:
             else:
                 if not current_obj.raw_pixel_points or curr_pt != current_obj.raw_pixel_points[-1]:
                     current_obj.raw_pixel_points.append(curr_pt)
+        
         if st.button("🗑️ 清除目前點選點"):
             current_obj.raw_pixel_points = []
             st.rerun()
 
     with col2:
-        st.subheader("📏 3. 座標設定")
+        st.subheader("📏 3. 座標範圍設定")
         real_x_max = st.number_input("X 軸最大值 (A)", value=1000.0)
         real_y_max = st.number_input("Y 軸最大值 (mJ/V)", value=125.0)
+        
         if len(st.session_state.calib_pts) == 2:
             p0, p_max = st.session_state.calib_pts
             dx, dy = p_max[0] - p0[0], p_max[1] - p0[1]
@@ -133,7 +141,7 @@ if uploaded_file:
                 st.dataframe(pd.DataFrame(current_obj.real_data_points, columns=["X", "Y"]), height=150)
 
 # ==========================================
-# 擬合與全域計算器
+# 擬合與進階計算器 (Mode A & B)
 # ==========================================
 if len(st.session_state.calib_pts) == 2 and current_obj.real_data_points:
     st.divider()
@@ -151,31 +159,51 @@ if len(st.session_state.calib_pts) == 2 and current_obj.real_data_points:
             st.success("擬合成功！")
         except Exception as e: st.error(f"擬合失敗: {e}")
 
-    # --- 5. 全域損耗計算器 ---
-    st.subheader("📋 5. 全域損耗計算器 (Global Loss Calculator)")
-    fitted_objs = {name: obj for name, obj in st.session_state.curve_objects.items() if obj.params is not None}
+    # --- 5. 進階損耗計算器 ---
+    st.subheader("📋 5. 損耗計算器 (含模式 B 正弦波平均)")
+    fitted_objs = {n: o for n, o in st.session_state.curve_objects.items() if o.params is not None}
     
     if fitted_objs:
-        calc_i = st.number_input("輸入目標電流 $i$ (A)，即時計算所有已擬合曲線數值：", value=float(real_x_max/2))
+        calc_mode = st.radio("選擇評估模式", ["模式 A：單點直流 (Static DC)", "模式 B：正弦波平均 (Sinusoidal Average)"])
+        f_sw = st.number_input("切換頻率 f_sw (Hz)", value=10000.0, step=1000.0)
         
+        if calc_mode == "模式 A：單點直流 (Static DC)":
+            calc_i = st.number_input("輸入穩定電流 i (A)", value=float(real_x_max/2))
+        else:
+            calc_i = st.number_input("輸入正弦波峰值電流 I_peak (A)", value=float(real_x_max/2))
+            st.caption("※ 程式將根據第 10 式，在 0 ~ π 區間進行數值積分求取平均能量")
+
         calc_results = []
-        total_sw_loss = 0.0
+        total_sw_power_w = 0.0
         
+        # 進行計算
         for name, obj in fitted_objs.items():
-            val = obj.get_loss(calc_i)
-            calc_results.append({"曲線名稱": name, "計算結果 (Value)": f"{val:.4f}", "模型": obj.model_type})
-            # 如果名稱包含 Eon, Eoff, Err 則自動累計總切換損耗
-            if any(key in name.lower() for key in ["eon", "eoff", "err"]):
-                total_sw_loss += val
+            if calc_mode == "模式 A：單點直流 (Static DC)":
+                energy_avg = obj.get_loss(calc_i)
+            else:
+                # 執行模式 B 的數值積分 (第 10 式邏輯)[cite: 1]
+                thetas = np.linspace(0, np.pi, 100)
+                energy_samples = [obj.get_loss(calc_i * np.sin(t)) for t in thetas]
+                energy_avg = np.mean(energy_samples) # 焦耳/次
+            
+            # 計算功率 (第 11 式)
+            power_w = energy_avg * f_sw * 1e-3 # 假設能量為 mJ，轉為 W
+            calc_results.append({
+                "曲線": name, 
+                "平均能量 (mJ)": f"{energy_avg:.4f}", 
+                "功率損耗 (W)": f"{power_w:.4f}"
+            })
+            
+            if any(k in name.lower() for k in ["eon", "eoff", "err"]):
+                total_sw_power_w += power_w
         
         c1, c2 = st.columns([2, 1])
-        with c1:
-            st.table(pd.DataFrame(calc_results))
-        with c2:
-            st.metric(label="預估總切換損耗 (Eon+Eoff+Err)", value=f"{total_sw_loss:.4f} mJ")
-            st.caption(f"基於電流 $i = {calc_i}$ A")
+        with c1: st.table(pd.DataFrame(calc_results))
+        with c2: 
+            st.metric(label="總切換功率損耗 (P_sw)", value=f"{total_sw_power_w:.4f} W")
+            st.caption(f"已包含 Eon+Eoff+Err 之加總[cite: 2]")
     else:
-        st.info("請至少完成一條曲線的擬合以啟用全域計算器。")
+        st.info("完成擬合後即可使用計算器。")
 
     # 繪圖
     fig, ax = plt.subplots(figsize=(10, 4))
@@ -183,16 +211,12 @@ if len(st.session_state.calib_pts) == 2 and current_obj.real_data_points:
     for name, obj in st.session_state.curve_objects.items():
         if obj.params is not None:
             ax.plot(xi, [obj.get_loss(val) for val in xi], label=f"{name}")
-            if name == current_obj.name:
-                pts = np.array(current_obj.real_data_points)
-                ax.scatter(pts[:,0], pts[:,1], color='red', marker='x')
-    ax.set_xlim(0, real_x_max); ax.set_ylim(0, real_y_max)
-    ax.set_xlabel("Current (A)"); ax.set_ylabel("Value"); ax.legend(); ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, real_x_max); ax.set_ylim(0, real_y_max); ax.legend(); ax.grid(True, alpha=0.3)
     st.pyplot(fig)
 
 # 參數彙整表
 st.divider()
-st.subheader("📋 擬合係數彙整表 (A, B, C)")
+st.subheader("📋 擬合係撤彙整表 (A, B, C)")
 summary = [{"曲線名稱": n, "模型": o.model_type, "方程式": o.get_equation_string()} 
            for n, o in st.session_state.curve_objects.items() if o.params is not None]
 if summary: st.table(pd.DataFrame(summary))
