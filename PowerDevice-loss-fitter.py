@@ -26,9 +26,10 @@ class PowerLossCurve:
         self.params = params
 
     def get_loss(self, current_i):
-        """根據擬合係數回傳計算出的數值"""
+        """根據論文(8)式或選定模型回傳計算出的數值"""
         if self.params is None: return None
         if self.model_type == "Method_SW3":
+            # E = A + B*i + C*i^2
             A, B, C = self.params
             return A + B * current_i + C * (current_i ** 2)
         elif self.model_type == "Linear":
@@ -65,7 +66,6 @@ st.title("⚡ Power Device Loss Evaluator (Pro Version)")
 # ==========================================
 st.sidebar.header("🛠️ 1. 曲線與標定管理")
 
-# --- A. 新增功能 ---
 new_name = st.sidebar.text_input("輸入新曲線名稱", value=f"Curve_{len(st.session_state.curve_objects) + 1}")
 model_choice = st.sidebar.selectbox("選擇擬合模型", ["Method_SW3", "Linear", "Power"])
 
@@ -75,22 +75,15 @@ if st.sidebar.button("➕ 新增曲線檔案"):
         st.session_state.current_curve_name = new_name
         st.rerun()
 
-# --- B. 切換與刪除功能 ---
 all_names = list(st.session_state.curve_objects.keys())
 if all_names:
-    # 確保當前選中的名稱仍在列表中
     if st.session_state.current_curve_name not in all_names:
         st.session_state.current_curve_name = all_names[0]
         
-    selected_name = st.sidebar.selectbox(
-        "切換編輯對象", 
-        all_names, 
-        index=all_names.index(st.session_state.current_curve_name)
-    )
+    selected_name = st.sidebar.selectbox("切換編輯對象", all_names, index=all_names.index(st.session_state.current_curve_name))
     st.session_state.current_curve_name = selected_name
     current_obj = st.session_state.curve_objects[selected_name]
     
-    # 刪除按鈕
     if st.sidebar.button("🗑️ 刪除目前選中的曲線", use_container_width=True):
         del st.session_state.curve_objects[selected_name]
         remaining = list(st.session_state.curve_objects.keys())
@@ -171,6 +164,20 @@ if len(st.session_state.calib_pts) == 2 and current_obj.real_data_points:
             st.success("擬合成功！")
         except Exception as e: st.error(f"擬合失敗: {e}")
 
+    # --- 4. 損耗即時計算器 (New Feature) ---
+    st.subheader("🔍 4. 損耗即時計算器 (Calculator)")
+    if current_obj.params is not None:
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            test_i = st.number_input(f"輸入測試電流 $i$ (A) - 針對 {current_obj.name}", value=float(real_x_max/2))
+        with c2:
+            calculated_loss = current_obj.get_loss(test_i)
+            st.metric(label=f"計算損耗/電壓結果 ({current_obj.name})", value=f"{calculated_loss:.4f}")
+            st.caption(f"使用公式: ${current_obj.get_equation_string()}$")
+    else:
+        st.info("請先執行擬合以啟用計算器。")
+
+    # 繪圖驗證
     fig, ax = plt.subplots(figsize=(10, 4))
     xi = np.linspace(0, real_x_max, 200)
     for name, obj in st.session_state.curve_objects.items():
