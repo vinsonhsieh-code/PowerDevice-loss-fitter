@@ -55,7 +55,7 @@ if "fwd_obj" not in st.session_state: st.session_state.fwd_obj = ConductionDevic
 for k in ["calib_sw", "calib_igbt", "calib_fwd"]:
     if k not in st.session_state: st.session_state[k] = []
 
-st.title("🚀 Power Device 綜合損耗建模系統 (Professional Layout)")
+st.title("🚀 Power Device 綜合損耗建模系統 (Full Equation Support)")
 
 # ==========================================
 # 3. Sidebar
@@ -75,7 +75,7 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 4. 作業區 (嚴格維持現狀)
+# 4. 三大作業區 (保持原功能不變)
 # ==========================================
 st.header("1️⃣ 切換損耗建模 (Method SW3)")
 sw_list = list(st.session_state.sw_curves.keys())
@@ -180,12 +180,12 @@ if up_f:
                 st.success(f"FWD {tm_f} 擬合成功")
 
 # ==========================================
-# 5. 分析器 (修正 NameError 並優化對齊)
+# 5. 可視化與分析器 (對齊與總損耗公式說明)
 # ==========================================
 st.divider()
 st.header("📊 擬合數據與全域損耗分析")
 
-# 圖表可視化
+# A. 圖表可視化
 res_c1, res_c2, res_c3 = st.columns(3)
 with res_c1:
     st.caption("切換能量擬合 (mJ)")
@@ -234,6 +234,7 @@ if st.session_state.igbt_obj.fit_tmax and st.session_state.fwd_obj.fit_tmax:
 
     st.markdown("---")
     
+    # 損耗計算
     pcon_igbt = st.session_state.igbt_obj.calc_pcon(tj_c, irms, iavg)
     pcon_fwd  = st.session_state.fwd_obj.calc_pcon(tj_c, irms, iavg)
     psw_total = 0.0
@@ -242,7 +243,7 @@ if st.session_state.igbt_obj.fit_tmax and st.session_state.fwd_obj.fit_tmax:
             e_avg = np.mean([o.get_val(i_pk * np.sin(t)) for t in np.linspace(0, np.pi, 100)])
             psw_total += e_avg * fsw * 1e-3
 
-    # 排版修正：修正 LaTeX 內的 sw 變數引用錯誤
+    # 排版與方程式顯示 (導通損)
     with st.container():
         res_m, res_e = st.columns([1, 2.5])
         res_m.metric("IGBT 導通損耗", f"{pcon_igbt:.2f} W")
@@ -253,14 +254,22 @@ if st.session_state.igbt_obj.fit_tmax and st.session_state.fwd_obj.fit_tmax:
         res_m.metric("FWD 導通損耗", f"{pcon_fwd:.2f} W")
         res_e.latex(r"P_{con,FWD} = R_{f}(T_j) \cdot I_{rms}^2 + V_{f}(T_j) \cdot I_{avg}")
     st.divider()
+    # 切換損
     with st.container():
         res_m, res_e = st.columns([1, 2.5])
         res_m.metric("總切換損耗 (P_sw)", f"{psw_total:.2f} W")
         res_e.latex(r"P_{sw} = \left( \frac{1}{\pi} \int_{0}^{\pi} E_{sw}(i(\theta)) d\theta \right) \cdot f_{sw}")
-        # 修正此行：移除 f-string 避免花括號衝突
         res_e.caption("其中 $E_{sw}(i) = A + B \cdot i + C \cdot i^2$")
 
     st.markdown("---")
-    st.success(f"### **⚡ 總預估損耗 (P_total): {psw_total + pcon_igbt + pcon_fwd:.2f} W**")
+    
+    # --- 4. 總預估損耗 (補上 P_total 方程式說明) ---
+    p_total = psw_total + pcon_igbt + pcon_fwd
+    with st.container():
+        res_m_total, res_e_total = st.columns([1, 2.5])
+        res_m_total.success(f"### **⚡ 總預估損耗 (P_total): {p_total:.2f} W**")
+        res_e_total.latex(r"P_{total} = P_{sw} + P_{con,IGBT} + P_{con,FWD}")
+        res_e_total.markdown("**方程式說明 (Total Loss)**：系統總損耗為切換損耗與導通損耗（含 IGBT 及 FWD 元件）之代數和。")
+    
 else:
     st.info("💡 請先完成導通特性擬合 (Tmin 與 Tmax) 後，分析器將自動開啟。")
