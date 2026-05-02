@@ -6,7 +6,7 @@ from scipy.optimize import curve_fit
 from PIL import Image
 from streamlit_image_coordinates import streamlit_image_coordinates
 
-st.set_page_config(page_title="Power Device Loss Fitter Pro", layout="wide")
+st.set_page_config(page_title="Power Device Loss Fitter Pro - SW & CON", layout="wide")
 
 # ==========================================
 # 核心定義：曲線類別
@@ -14,7 +14,7 @@ st.set_page_config(page_title="Power Device Loss Fitter Pro", layout="wide")
 class PowerLossCurve:
     def __init__(self, name, category="Switching", model_type="Method_SW3"):
         self.name = name
-        self.category = category # "Switching" (能量 mJ) 或 "Conduction" (電壓 V)
+        self.category = category # "Switching" 或 "Conduction"
         self.model_type = model_type
         self.params = None  
         self.raw_pixel_points = [] 
@@ -25,213 +25,191 @@ class PowerLossCurve:
 
     def get_value(self, current_i):
         """
-        計算瞬時值：
-        - 若為 Switching：回傳能量 E(i) [mJ]
-        - 若為 Conduction：回傳順向壓降 v(i) [V]
+        Switching: 回傳單次能量 E (mJ)
+        Conduction: 回傳瞬時電壓 V (V)
         """
         if self.params is None: return 0.0
-        i_abs = abs(current_i)
+        i = abs(current_i)
         if self.model_type == "Method_SW3":
-            # E = A + B*i + C*i^2
+            # E = A + B*i + C*i^2[cite: 1]
             A, B, C = self.params
-            return A + B * i_abs + C * (i_abs ** 2)
-        elif self.model_type == "Linear":
-            # v = VX + RX*i
-            v0, r = self.params
-            return v0 + r * i_abs
+            return A + B * i + C * (i ** 2)
+        elif self.model_type == "Linear" or self.model_type == "Method_Con1":
+            # V = Vx + Rx * i
+            v_th, r = self.params
+            return v_th + r * i
         elif self.model_type == "Power":
             a, b = self.params
-            return a * (i_abs ** b)
+            return a * (i ** b)
         return 0.0
 
     def get_equation_string(self):
         if self.params is None: return "尚未擬合"
+        p = self.params
         if self.model_type == "Method_SW3":
-            return f"{self.params[0]:.6e} + {self.params[1]:.6e}*i + {self.params[2]:.6e}*i^2"
-        elif self.model_type == "Linear":
-            return f"{self.params[0]:.4f} + {self.params[1]:.4f}*i"
-        return f"Params: {self.params}"
+            return f"{p[0]:.4e} + {p[1]:.4e}*i + {p[2]:.4e}*i^2"
+        elif self.model_type == "Linear" or self.model_type == "Method_Con1":
+            return f"V_th:{p[0]:.4f} + R:{p[1]:.4e}*i"
+        elif self.model_type == "Power":
+            return f"{p[0]:.4f} * i^{p[1]:.4f}"
 
 # ==========================================
 # Session State 初始化
 # ==========================================
-if "sw_curves" not in st.session_state: st.session_state.sw_curves = {}  
-if "con_curves" not in st.session_state: st.session_state.con_curves = {}  
-if "sw_calib" not in st.session_state: st.session_state.sw_calib = [] 
-if "con_calib" not in st.session_state: st.session_state.con_calib = [] 
+if "sw_curves" not in st.session_state: st.session_state.sw_curves = {}
+if "con_curves" not in st.session_state: st.session_state.con_curves = {}
+if "active_curve" not in st.session_state: st.session_state.active_curve = {"name": None, "cat": None}
+if "calib_pts" not in st.session_state: st.session_state.calib_pts = []
 
-st.title("⚡ Power Device 損耗評估系統 (切換 + 導通)")
+st.title("⚡ Power Device Loss Evaluator (SW & CON Integrated)")
 
 # ==========================================
-# 一、 切換損耗區域 (Switching Loss Section)
+# Sidebar：獨立管理區域
 # ==========================================
-st.header("📋 1. 切換損耗評估 (Switching Loss Evaluation)")
-sw_col_side, sw_col_main = st.columns([1, 4])
+st.sidebar.header("📊 1a. 切換損管理 (Switching)")
+sw_name = st.sidebar.text_input("切換損曲線名稱", value=f"SW_{len(st.session_state.sw_curves)+1}")
+sw_model = st.sidebar.selectbox("切換損模型", ["Method_SW3", "Power"], key="sw_m")
+if st.sidebar.button("➕ 新增切換損曲線"):
+    st.session_state.sw_curves[sw_name] = PowerLossCurve(sw_name, "Switching", sw_model)
+    st.session_state.active_curve = {"name": sw_name, "cat": "Switching"}
 
-with sw_col_side:
-    st.subheader("管理切換曲線")
-    new_sw = st.text_input("切換曲線名稱", value=f"Esw_{len(st.session_state.sw_curves)+1}")
-    if st.button("➕ 新增切換曲線"):
-        st.session_state.sw_curves[new_sw] = PowerLossCurve(new_sw, "Switching", "Method_SW3")
-    
-    sw_list = list(st.session_state.sw_curves.keys())
-    selected_sw = st.selectbox("編輯切換對象", sw_list) if sw_list else None
-    if selected_sw and st.button("🗑️ 刪除切換曲線"):
-        del st.session_state.sw_curves[selected_sw]
-        st.rerun()
+st.sidebar.divider()
+st.sidebar.header("🔌 1b. 導通損管理 (Conduction)")
+con_name = st.sidebar.text_input("導通損曲線名稱", value=f"CON_{len(st.session_state.con_curves)+1}")
+if st.sidebar.button("➕ 新增導通損曲線"):
+    st.session_state.con_curves[con_name] = PowerLossCurve(con_name, "Conduction", "Method_Con1")
+    st.session_state.active_curve = {"name": con_name, "cat": "Conduction"}
 
-if selected_sw:
-    sw_obj = st.session_state.sw_curves[selected_sw]
-    uploaded_sw = st.file_uploader("上傳切換損耗圖檔 (能量 vs 電流)", type=["png","jpg"], key="sw_up")
-    
-    if uploaded_sw:
-        img_sw = Image.open(uploaded_sw)
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.write(f"正在擷取: {selected_sw}")
-            val_sw = streamlit_image_coordinates(img_sw, key="sw_img")
-            if val_sw:
-                pt = (val_sw["x"], val_sw["y"])
-                if len(st.session_state.sw_calib) < 2:
-                    if not st.session_state.sw_calib or pt != st.session_state.sw_calib[-1]:
-                        st.session_state.sw_calib.append(pt)
-                        st.rerun()
+st.sidebar.divider()
+all_sw = list(st.session_state.sw_curves.keys())
+all_con = list(st.session_state.con_curves.keys())
+selected_target = st.sidebar.selectbox("🎯 目前選中編輯對象", all_sw + all_con)
+if selected_target:
+    st.session_state.active_curve["name"] = selected_target
+    st.session_state.active_curve["cat"] = "Switching" if selected_target in all_sw else "Conduction"
+
+if st.sidebar.button("🗑️ 刪除選中曲線"):
+    if selected_target in all_sw: del st.session_state.sw_curves[selected_target]
+    else: del st.session_state.con_curves[selected_target]
+    st.rerun()
+
+if st.sidebar.button("🔄 重置標定"):
+    st.session_state.calib_pts = []
+    st.rerun()
+
+# ==========================================
+# 主區域 2：圖片擷取與校準
+# ==========================================
+uploaded_file = st.file_uploader("2. 上傳圖檔", type=["png", "jpg", "jpeg"])
+if uploaded_file:
+    img = Image.open(uploaded_file)
+    width, height = img.size
+    col_img, col_data = st.columns([2, 1])
+
+    with col_img:
+        target_name = st.session_state.active_curve["name"]
+        if target_name:
+            st.subheader(f"📍 正在擷取: {target_name}")
+            if len(st.session_state.calib_pts) < 2:
+                steps = ["點擊原點 (0,0)", "點擊最大刻度點"]
+                st.warning(f"請先完成標定：{steps[len(st.session_state.calib_pts)]}")
+            
+            value = streamlit_image_coordinates(img, key="img_main")
+            if value:
+                curr = (value["x"], value["y"])
+                if len(st.session_state.calib_pts) < 2:
+                    if not st.session_state.calib_pts or curr != st.session_state.calib_pts[-1]:
+                        st.session_state.calib_pts.append(curr); st.rerun()
                 else:
-                    if not sw_obj.raw_pixel_points or pt != sw_obj.raw_pixel_points[-1]:
-                        sw_obj.raw_pixel_points.append(pt)
-        with c2:
-            sw_xmax = st.number_input("X軸最大 (A)", value=1000.0, key="sw_xm")
-            sw_ymax = st.number_input("Y軸最大 (mJ)", value=125.0, key="sw_ym")
-            if len(st.session_state.sw_calib) == 2:
-                p0, pm = st.session_state.sw_calib
-                sx, sy = sw_xmax/(pm[0]-p0[0]), sw_ymax/(pm[1]-p0[1])
-                sw_obj.real_data_points = [((p[0]-p0[0])*sx, (p[1]-p0[1])*sy) for p in sw_obj.raw_pixel_points]
-                if st.button("🚀 擬合切換損"):
-                    x, y = np.array([p[0] for p in sw_obj.real_data_points]), np.array([p[1] for p in sw_obj.real_data_points])
-                    popt, _ = curve_fit(lambda i,A,B,C: A+B*i+C*i**2, x, y)
-                    sw_obj.set_params(popt)
-                st.write(f"已擷取 {len(sw_obj.raw_pixel_points)} 點")
+                    target_obj = st.session_state.sw_curves[target_name] if target_name in all_sw else st.session_state.con_curves[target_name]
+                    if not target_obj.raw_pixel_points or curr != target_obj.raw_pixel_points[-1]:
+                        target_obj.raw_pixel_points.append(curr)
 
+    with col_data:
+        st.subheader("📏 座標校正")
+        rx_max = st.number_input("X 軸最大值 (A)", value=1000.0)
+        ry_max = st.number_input("Y 軸最大值 (mJ 或 V)", value=125.0)
+        if len(st.session_state.calib_pts) == 2:
+            p0, pm = st.session_state.calib_pts
+            sx, sy = rx_max/(pm[0]-p0[0]), ry_max/(pm[1]-p0[1])
+            if target_name:
+                obj = st.session_state.sw_curves[target_name] if target_name in all_sw else st.session_state.con_curves[target_name]
+                obj.real_data_points = [((p[0]-p0[0])*sx, (p[1]-p0[1])*sy) for p in obj.raw_pixel_points]
+                st.dataframe(pd.DataFrame(obj.real_data_points, columns=["X","Y"]), height=150)
+
+# ==========================================
+# 主區域 3：擬合與呈現
+# ==========================================
+if uploaded_file and selected_target:
+    st.divider()
+    if st.button(f"🚀 執行擬合 ({selected_target})", type="primary"):
+        obj = st.session_state.sw_curves[selected_target] if selected_target in all_sw else st.session_state.con_curves[selected_target]
+        x, y = np.array([p[0] for p in obj.real_data_points]), np.array([p[1] for p in obj.real_data_points])
+        if len(x) > 2:
+            if obj.model_type == "Method_SW3":
+                popt, _ = curve_fit(lambda i,a,b,c: a+b*i+c*i**2, x, y)
+            elif obj.model_type == "Method_Con1" or obj.model_type == "Linear":
+                popt, _ = curve_fit(lambda i,v,r: v+r*i, x, y)
+            else: popt, _ = curve_fit(lambda i,a,b: a*(i**b), x, y)
+            obj.set_params(popt); st.success("擬合成功")
+
+    # 分別呈現切換損與導通損圖表
+    c_sw_plot, c_con_plot = st.columns(2)
+    xi = np.linspace(0, rx_max, 200)
+    
+    with c_sw_plot:
+        st.subheader("📈 切換損擬合曲線 (Energy vs I)")
+        fig_sw, ax_sw = plt.subplots()
+        for n, o in st.session_state.sw_curves.items():
+            if o.params is not None: ax_sw.plot(xi, [o.get_value(v) for v in xi], label=n)
+        ax_sw.set_xlabel("Current (A)"); ax_sw.set_ylabel("Energy (mJ)"); ax_sw.legend(); st.pyplot(fig_sw)
+
+    with c_con_plot:
+        st.subheader("📈 導通損擬合曲線 (Voltage vs I)")
+        fig_con, ax_con = plt.subplots()
+        for n, o in st.session_state.con_curves.items():
+            if o.params is not None: ax_con.plot(xi, [o.get_value(v) for v in xi], label=n)
+        ax_con.set_xlabel("Current (A)"); ax_con.set_ylabel("Voltage (V)"); ax_con.legend(); st.pyplot(fig_con)
+
+# ==========================================
+# 主區域 4：全域動態分析器 (加總 SW + CON)
+# ==========================================
 st.divider()
+st.subheader("📋 4. 綜合損耗動態分析器")
+c1, c2, c3 = st.columns(3)
+with c1: i_peak = st.number_input("峰值電流 I_peak (A)", value=500.0)
+with c2: f_out = st.number_input("基波頻率 f_out (Hz)", value=50.0)
+with c3: f_sw = st.number_input("切換頻率 f_sw (Hz)", value=10000.0)
 
-# ==========================================
-# 二、 導通損耗區域 (Conduction Loss Section)
-# ==========================================
-st.header("📋 2. 導通損耗評估 (Conduction Loss Evaluation)")
-st.info("依據論文 Method Con1：使用順向壓降 $v-i$ 特性建立線性模型 $v_X = V_X + R_X \cdot i$。")
+t = np.linspace(0, 1/f_out, 500); i_w = i_peak * np.sin(2*np.pi*f_out*t)
+p_sw_total, p_con_total = 0.0, 0.0
 
-con_col_side, con_col_main = st.columns([1, 4])
-
-with con_col_side:
-    st.subheader("管理導通曲線")
-    new_con = st.text_input("導通曲線名稱", value=f"Vcon_{len(st.session_state.con_curves)+1}")
-    if st.button("➕ 新增導通曲線"):
-        st.session_state.con_curves[new_con] = PowerLossCurve(new_con, "Conduction", "Linear")
-    
-    con_list = list(st.session_state.con_curves.keys())
-    selected_con = st.selectbox("編輯導通對象", con_list) if con_list else None
-    if selected_con and st.button("🗑️ 刪除導通曲線"):
-        del st.session_state.con_curves[selected_con]
-        st.rerun()
-
-if selected_con:
-    con_obj = st.session_state.con_curves[selected_con]
-    uploaded_con = st.file_uploader("上傳導通特性圖檔 (壓降 vs 電流)", type=["png","jpg"], key="con_up")
-    
-    if uploaded_con:
-        img_con = Image.open(uploaded_con)
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.write(f"正在擷取: {selected_con}")
-            val_con = streamlit_image_coordinates(img_con, key="con_img")
-            if val_con:
-                pt = (val_con["x"], val_con["y"])
-                if len(st.session_state.con_calib) < 2:
-                    if not st.session_state.con_calib or pt != st.session_state.con_calib[-1]:
-                        st.session_state.con_calib.append(pt)
-                        st.rerun()
-                else:
-                    if not con_obj.raw_pixel_points or pt != con_obj.raw_pixel_points[-1]:
-                        con_obj.raw_pixel_points.append(pt)
-        with c2:
-            con_xmax = st.number_input("X軸最大 (V)", value=5.0, key="con_xm")
-            con_ymax = st.number_input("Y軸最大 (A)", value=800.0, key="con_ym")
-            if len(st.session_state.con_calib) == 2:
-                p0, pm = st.session_state.con_calib
-                # 注意：導通圖通常 X 是電壓，Y 是電流
-                sx, sy = con_xmax/(pm[0]-p0[0]), con_ymax/(pm[1]-p0[1])
-                # 儲存時統一轉為 (Current, Voltage) 以符合擬合邏輯
-                con_obj.real_data_points = [((p[1]-p0[1])*sy, (p[0]-p0[0])*sx) for p in con_obj.raw_pixel_points]
-                if st.button("🚀 擬合導通損 (Linear)"):
-                    x, y = np.array([p[0] for p in con_obj.real_data_points]), np.array([p[1] for p in con_obj.real_data_points])
-                    popt, _ = curve_fit(lambda i,v0,r: v0+r*i, x, y)
-                    con_obj.set_params(popt)
-                st.write(f"已擷取 {len(con_obj.raw_pixel_points)} 點")
-
-st.divider()
-
-# ==========================================
-# 三、 全域損耗分析與波形 (Global Calculator)
-# ==========================================
-st.header("📋 3. 全域損耗動態分析 (Switching + Conduction)")
-
-all_fitted_sw = {n: o for n, o in st.session_state.sw_curves.items() if o.params is not None}
-all_fitted_con = {n: o for n, o in st.session_state.con_curves.items() if o.params is not None}
-
-if all_fitted_sw or all_fitted_con:
-    c1, c2, c3 = st.columns(3)
-    i_peak = c1.number_input("峰值電流 I_peak (A)", value=400.0)
-    f_out = c2.number_input("基波頻率 f_out (Hz)", value=50.0)
-    f_sw = c3.number_input("切換頻率 f_sw (Hz)", value=10000.0)
-
-    # 時間與波形計算
-    t = np.linspace(0, 1/f_out, 500)
-    i_wave = i_peak * np.sin(2 * np.pi * f_out * t)
-    i_abs = np.abs(i_wave)
-
-    total_sw_p = 0.0
-    total_con_p = 0.0
-    
-    # 1. 計算切換損耗 (能量 mJ -> 功率 W)[cite: 2]
-    for n, o in all_fitted_sw.items():
-        e_avg = np.mean([o.get_value(i_peak * np.sin(phi)) for phi in np.linspace(0, np.pi, 200)])
-        total_sw_p += e_avg * f_sw * 1e-3
-
-    # 2. 計算導通損耗 (電壓 V * 電流 A -> 功率 W)
-    # Equation 14: p_con = v(i) * i
-    for n, o in all_fitted_con.items():
-        # 只在正半週計算導通損耗
-        p_instant = np.array([o.get_value(curr) * curr if curr > 0 else 0 for curr in i_wave])
-        total_con_p += np.mean(p_instant) # 平均功率
-
-    st.columns(2)[0].metric("總切換損耗 P_sw", f"{total_sw_p:.2f} W")
-    st.columns(2)[1].metric("總導通損耗 P_con", f"{total_con_p:.2f} W")
-    st.success(f"🔥 總功率損耗: {total_sw_p + total_con_p:.2f} W")
-
-    # 分別呈現擬合波形
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-    
-    # 切換損波形 (Energy)
-    for n, o in all_fitted_sw.items():
-        ax1.plot(t*1000, [o.get_value(i) for i in i_wave], label=f"E_sw: {n}")
-    ax1.set_title("Switching Energy Waveform (mJ)")
-    ax1.set_ylabel("Energy (mJ)")
-    ax1.legend(); ax1.grid(True, alpha=0.3)
-
-    # 導通損波形 (Instantaneous Power)
-    for n, o in all_fitted_con.items():
-        ax2.plot(t*1000, [o.get_value(i)*i if i > 0 else 0 for i in i_wave], label=f"P_con: {n}")
-    ax2.set_title("Instantaneous Conduction Power Waveform (W)")
-    ax2.set_ylabel("Power (W)")
-    ax2.set_xlabel("Time (ms)")
-    ax2.legend(); ax2.grid(True, alpha=0.3)
-
-    st.pyplot(fig)
-
-# 係數表彙整
-st.subheader("📋 系統係數彙整")
-sum_data = []
-for n, o in {**st.session_state.sw_curves, **st.session_state.con_curves}.items():
+# 計算功率
+for o in st.session_state.sw_curves.values():
     if o.params is not None:
-        sum_data.append({"名稱": n, "分類": o.category, "方程式": o.get_equation_string()})
-if sum_data: st.table(pd.DataFrame(sum_data))
+        e_avg = np.mean([o.get_value(i_peak * np.sin(phi)) for phi in np.linspace(0, np.pi, 200)])
+        p_sw_total += e_avg * f_sw * 1e-3 #[cite: 1]
+
+for o in st.session_state.con_curves.values():
+    if o.params is not None:
+        # P_con = mean(v(i)*i)
+        p_instant = [o.get_value(iv) * abs(iv) for iv in i_w]
+        p_con_total += np.mean(p_instant) #[cite: 2]
+
+col_m1, col_m2, col_m3 = st.columns(3)
+col_m1.metric("總切換損耗 (P_sw)", f"{p_sw_total:.2f} W")
+col_m2.metric("總導通損耗 (P_con)", f"{p_con_total:.2f} W")
+col_m3.metric("總功率損耗 (P_total)", f"{p_sw_total + p_con_total:.2f} W")
+
+# 動態波形
+fig_w, ax_w1 = plt.subplots(figsize=(10, 4))
+ax_w1.plot(t*1000, i_w, 'b--', alpha=0.3, label="i(t)")
+ax_w1.set_ylabel("Current (A)", color='b')
+ax_w2 = ax_w1.twinx()
+for n, o in st.session_state.sw_curves.items():
+    if o.params is not None: ax_w2.plot(t*1000, [o.get_value(iv)*f_sw*1e-3 for iv in i_w], label=f"P_sw:{n}")
+for n, o in st.session_state.con_curves.items():
+    if o.params is not None: ax_w2.plot(t*1000, [o.get_value(iv)*abs(iv) for iv in i_w], label=f"P_con:{n}")
+ax_w2.set_ylabel("Instantaneous Power (W)", color='r')
+ax_w2.legend(loc='upper right', fontsize='small')
+st.pyplot(fig_w)
