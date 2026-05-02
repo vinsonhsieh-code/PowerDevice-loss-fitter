@@ -9,7 +9,7 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 st.set_page_config(page_title="Power Device Loss Fitter - SOP Pro", layout="wide")
 
 # ==========================================
-# 1. 核心類別定義 (保持邏輯嚴格不動)
+# 1. 核心類別定義 (嚴格維持現狀)
 # ==========================================
 class SwitchingCurve:
     def __init__(self, name):
@@ -75,11 +75,8 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================
-# 4. 作業區 (同一頁面佈局)
+# 4. 作業區 (嚴格維持現狀)
 # ==========================================
-# [此處保留所有原本的 Switch/IGBT/FWD 上傳與擬合 UI 邏輯，代碼同前版本...]
-# (為了節省篇幅，此處邏輯完全不變)
-# ... [切換損耗區域渲染] ...
 st.header("1️⃣ 切換損耗建模 (Method SW3)")
 sw_list = list(st.session_state.sw_curves.keys())
 if not sw_list: st.info("請在側邊欄新增曲線。")
@@ -101,7 +98,7 @@ else:
                     obj = st.session_state.sw_curves[act_sw]
                     if not obj.raw_pts or p != obj.raw_pts[-1]: obj.raw_pts.append(p)
         with c2:
-            xm, ym = st.number_input("SW X Max", 1000.0), st.number_input("SW Y Max", 125.0)
+            xm, ym = st.number_input("SW I(A) Max", 1000.0), st.number_input("SW E(mJ) Max", 125.0)
             if len(st.session_state.calib_sw) == 2:
                 p0, pm = st.session_state.calib_sw
                 sx, sy = xm/(pm[0]-p0[0]), ym/(pm[1]-p0[1])
@@ -112,7 +109,6 @@ else:
                     popt, _ = curve_fit(lambda i,A,B,C: A+B*i+C*i**2, xd, yd)
                     obj.params = popt; st.success("擬合成功")
 
-# ... [IGBT 導通損區域渲染] ...
 st.divider()
 st.header("2️⃣ IGBT 導通特性建模 (Method Con1)")
 tm_i = st.radio("IGBT 溫度點", [f"{tc1}°C", f"{tc2}°C"], horizontal=True, key="t_i")
@@ -148,7 +144,6 @@ if up_i:
                 else: st.session_state.igbt_obj.fit_tmax = [z[1], z[0]]
                 st.success(f"IGBT {tm_i} 擬合成功")
 
-# ... [FWD 導通損區域渲染] ...
 st.divider()
 st.header("3️⃣ FWD 導通特性建模 (Method Con1)")
 tm_f = st.radio("FWD 溫度點", [f"{tc1}°C", f"{tc2}°C"], horizontal=True, key="t_f")
@@ -185,15 +180,15 @@ if up_f:
                 st.success(f"FWD {tm_f} 擬合成功")
 
 # ==========================================
-# 5. 可視化與分析器 (對齊與整潔優化)
+# 5. 分析器 (修正 NameError 並優化對齊)
 # ==========================================
 st.divider()
 st.header("📊 擬合數據與全域損耗分析")
 
-# A. 圖表可視化
+# 圖表可視化
 res_c1, res_c2, res_c3 = st.columns(3)
 with res_c1:
-    st.caption("切換損耗擬合 (mJ)")
+    st.caption("切換能量擬合 (mJ)")
     fig_s, ax_s = plt.subplots(figsize=(5,3.5))
     xi = np.linspace(0, 1000, 100)
     for n, o in st.session_state.sw_curves.items():
@@ -213,40 +208,32 @@ with res_c3:
         if p is not None: ax_f.plot(p[0]+p[1]*ii, ii, label=t)
     ax_f.set_xlabel("Voltage (V)"); ax_f.set_ylabel("Current (A)"); ax_f.legend(); st.pyplot(fig_f)
 
-# B. 分析器核心 (整潔排版重點)
 st.divider()
 st.subheader("🔍 全域損耗解算器 (Loss Calculator)")
 
 if st.session_state.igbt_obj.fit_tmax and st.session_state.fwd_obj.fit_tmax:
-    # 1. 輸入參數區
     with st.container():
         input_c1, input_c2, input_c3 = st.columns(3)
         tj_c = input_c1.number_input("工作溫度 Tj (°C)", value=100.0)
         i_pk = input_c2.number_input("峰值電流 I_peak (A)", value=400.0)
         fsw  = input_c3.number_input("切換頻率 f_sw (Hz)", value=15000.0)
     
-    # 2. 中間參數解算說明
-    irms = i_pk / 2
-    iavg = i_pk / np.pi
+    irms, iavg = i_pk / 2, i_pk / np.pi
     
     st.markdown("---")
     info_col1, info_col2 = st.columns([1.5, 1])
     with info_col1:
         st.info("💡 **電流與溫度係數解算說明**")
-        # 電流部分
         st.latex(r"I_{rms} = \frac{I_{peak}}{2} = " + f"{irms:.2f} A")
         st.latex(r"I_{avg} = \frac{I_{peak}}{\pi} = " + f"{iavg:.2f} A")
         
-        # 溫度插值部分 (Eq 17, 18)
         vx_i, rx_i = st.session_state.igbt_obj.get_eq19_params(tj_c)
         vx_f, rx_f = st.session_state.fwd_obj.get_eq19_params(tj_c)
         st.caption(f"當前溫度 {tj_c}°C 下之線性化參數：")
         st.code(f"IGBT: Vx={vx_i:.4f}V, Rx={rx_i*1000:.4f}mΩ | FWD: Vx={vx_f:.4f}V, Rx={rx_f*1000:.4f}mΩ")
 
-    # 3. 核心結果對齊 (數據指標與方程式平行對齊)
     st.markdown("---")
     
-    # 計算各項損耗
     pcon_igbt = st.session_state.igbt_obj.calc_pcon(tj_c, irms, iavg)
     pcon_fwd  = st.session_state.fwd_obj.calc_pcon(tj_c, irms, iavg)
     psw_total = 0.0
@@ -255,33 +242,25 @@ if st.session_state.igbt_obj.fit_tmax and st.session_state.fwd_obj.fit_tmax:
             e_avg = np.mean([o.get_val(i_pk * np.sin(t)) for t in np.linspace(0, np.pi, 100)])
             psw_total += e_avg * fsw * 1e-3
 
-    # 排版優化：使用多層 columns 確保 LaTeX 與 Metric 平行
-    # --- 第 1 排：IGBT 導通損 ---
+    # 排版修正：修正 LaTeX 內的 sw 變數引用錯誤
     with st.container():
         res_m, res_e = st.columns([1, 2.5])
         res_m.metric("IGBT 導通損耗", f"{pcon_igbt:.2f} W")
         res_e.latex(r"P_{con,IGBT} = R_{ce}(T_j) \cdot I_{rms}^2 + V_{ce}(T_j) \cdot I_{avg}")
-    
     st.divider()
-    
-    # --- 第 2 排：FWD 導通損 ---
     with st.container():
         res_m, res_e = st.columns([1, 2.5])
         res_m.metric("FWD 導通損耗", f"{pcon_fwd:.2f} W")
         res_e.latex(r"P_{con,FWD} = R_{f}(T_j) \cdot I_{rms}^2 + V_{f}(T_j) \cdot I_{avg}")
-
     st.divider()
-
-    # --- 第 3 排：切換損耗 ---
     with st.container():
         res_m, res_e = st.columns([1, 2.5])
         res_m.metric("總切換損耗 (P_sw)", f"{psw_total:.2f} W")
         res_e.latex(r"P_{sw} = \left( \frac{1}{\pi} \int_{0}^{\pi} E_{sw}(i(\theta)) d\theta \right) \cdot f_{sw}")
-        res_e.caption(f"其中 $E_{sw}(i) = A + B \cdot i + C \cdot i^2$")
+        # 修正此行：移除 f-string 避免花括號衝突
+        res_e.caption("其中 $E_{sw}(i) = A + B \cdot i + C \cdot i^2$")
 
-    # 4. 總結
     st.markdown("---")
     st.success(f"### **⚡ 總預估損耗 (P_total): {psw_total + pcon_igbt + pcon_fwd:.2f} W**")
-    
 else:
     st.info("💡 請先完成導通特性擬合 (Tmin 與 Tmax) 後，分析器將自動開啟。")
