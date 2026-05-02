@@ -9,7 +9,7 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 st.set_page_config(page_title="Power Device Loss Fitter - SOP Pro", layout="wide")
 
 # ==========================================
-# 1. 核心類別定義 (既存功能嚴格不改動)
+# 1. 核心類別定義 (嚴格維持現狀)
 # ==========================================
 class SwitchingCurve:
     def __init__(self, name):
@@ -19,7 +19,8 @@ class SwitchingCurve:
         self.real_pts = []
     def get_val(self, i):
         if self.params is None: return 0.0
-        return self.params[0] + self.params[1]*abs(i) + self.params[2]*(i**2)
+        i_abs = abs(i)
+        return self.params[0] + self.params[1]*i_abs + self.params[2]*(i_abs**2)
 
 class ConductionDevice:
     def __init__(self, name):
@@ -30,7 +31,6 @@ class ConductionDevice:
         self.real_pts_tmin, self.real_pts_tmax = [], []
 
     def get_eq19_params(self, tj_c):
-        """根據 Tj (°C) 解算 Rx 與 Vx (Eq 17, 18)"""
         if self.fit_tmin is None or self.fit_tmax is None: return None, None
         V1, R1 = self.fit_tmin
         V2, R2 = self.fit_tmax
@@ -55,10 +55,10 @@ if "fwd_obj" not in st.session_state: st.session_state.fwd_obj = ConductionDevic
 for k in ["calib_sw", "calib_igbt", "calib_fwd"]:
     if k not in st.session_state: st.session_state[k] = []
 
-st.title("🚀 Power Device 綜合損耗建模與熱平衡疊代系統")
+st.title("🚀 Power Device 綜合損耗建模與熱反饋分析系統")
 
 # ==========================================
-# 3. Sidebar 與 既存上傳擬合區 (代碼保持原狀)
+# 3. Sidebar
 # ==========================================
 with st.sidebar:
     st.header("📊 曲線管理")
@@ -66,28 +66,28 @@ with st.sidebar:
     if st.button("➕ 新增"): st.session_state.sw_curves[sw_n] = SwitchingCurve(sw_n)
     st.divider()
     st.subheader("🌡️ 溫度基準 (°C)")
-    tc1 = st.number_input("T_min", value=25.0); tc2 = st.number_input("T_max", value=150.0)
+    tc1 = st.number_input("T_min", value=25.0)
+    tc2 = st.number_input("T_max", value=150.0)
     st.session_state.igbt_obj.t_min_c = st.session_state.fwd_obj.t_min_c = tc1
     st.session_state.igbt_obj.t_max_c = st.session_state.fwd_obj.t_max_c = tc2
     if st.button("🔄 重置標定"):
         st.session_state.calib_sw = []; st.session_state.calib_igbt = []; st.session_state.calib_fwd = []
         st.rerun()
 
-# [作業區 1, 2, 3 邏輯嚴格保持原狀...]
-st.header("1️⃣ 切換損耗建模")
-# ... (省略重複之標定擬合 UI 代碼以保持排版整潔，功能完全保留) ...
-# (此處需包含原本 Switch/IGBT/FWD 的 render_zone 或上傳擬合邏輯)
-# [基於前幾次對話之完整代碼區塊內容]
-
-# (為確保作業區功能可運作，此處包含必要邏輯)
+# ==========================================
+# 4. 三大作業區 (保持原功能不變)
+# ==========================================
+st.header("1️⃣ 切換損耗建模 (Method SW3)")
 sw_list = list(st.session_state.sw_curves.keys())
-if sw_list:
-    act_sw = st.selectbox("切換曲線", sw_list)
-    up_sw = st.file_uploader("上傳 SW 圖", type=["png", "jpg"], key="u_sw")
+if not sw_list: st.info("請在側邊欄新增曲線。")
+else:
+    act_sw = st.selectbox("當前切換曲線", sw_list)
+    up_sw = st.file_uploader("上傳切換圖", type=["png", "jpg"], key="u_sw")
     if up_sw:
         img = Image.open(up_sw)
         c1, c2 = st.columns([2, 1])
         with c1:
+            if len(st.session_state.calib_sw) < 2: st.warning("👉 標定座標軸原點與最大點")
             v = streamlit_image_coordinates(img, key="c_sw")
             if v:
                 p = (v["x"], v["y"])
@@ -98,7 +98,7 @@ if sw_list:
                     obj = st.session_state.sw_curves[act_sw]
                     if not obj.raw_pts or p != obj.raw_pts[-1]: obj.raw_pts.append(p)
         with c2:
-            xm, ym = st.number_input("SW X Max", 1000.0), st.number_input("SW Y Max", 125.0)
+            xm, ym = st.number_input("SW I(A) Max", 1000.0), st.number_input("SW E(mJ) Max", 125.0)
             if len(st.session_state.calib_sw) == 2:
                 p0, pm = st.session_state.calib_sw
                 sx, sy = xm/(pm[0]-p0[0]), ym/(pm[1]-p0[1])
@@ -109,79 +109,209 @@ if sw_list:
                     popt, _ = curve_fit(lambda i,A,B,C: A+B*i+C*i**2, xd, yd)
                     obj.params = popt; st.success("擬合成功")
 
-# [IGBT/FWD 導通損標定擬合區域邏輯 同樣嚴格維持現狀...]
-# ... (此處保留原本的 render 邏輯) ...
+st.divider()
+st.header("2️⃣ IGBT 導通特性建模 (Method Con1)")
+tm_i = st.radio("IGBT 溫度點", [f"{tc1}°C", f"{tc2}°C"], horizontal=True, key="t_i")
+up_i = st.file_uploader("上傳 IGBT 圖", type=["png", "jpg"], key="u_i")
+if up_i:
+    img = Image.open(up_i)
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        v = streamlit_image_coordinates(img, key="c_i")
+        if v:
+            p = (v["x"], v["y"])
+            if len(st.session_state.calib_igbt) < 2:
+                if not st.session_state.calib_igbt or p != st.session_state.calib_igbt[-1]:
+                    st.session_state.calib_igbt.append(p); st.rerun()
+            else:
+                target = st.session_state.igbt_obj.raw_pts_tmin if tm_i.startswith(str(tc1)) else st.session_state.igbt_obj.raw_pts_tmax
+                if not target or p != target[-1]: target.append(p)
+    with c2:
+        xm, ym = st.number_input("IGBT V Max", 5.0), st.number_input("IGBT I Max", 800.0)
+        if len(st.session_state.calib_igbt) == 2:
+            p0, pm = st.session_state.calib_igbt
+            sx, sy = xm/(pm[0]-p0[0]), ym/(pm[1]-p0[1])
+            is_min = tm_i.startswith(str(tc1))
+            raw = st.session_state.igbt_obj.raw_pts_tmin if is_min else st.session_state.igbt_obj.raw_pts_tmax
+            real = [((px-p0[0])*sx, (py-p0[1])*sy) for px, py in raw]
+            if is_min: st.session_state.igbt_obj.real_pts_tmin = real
+            else: st.session_state.igbt_obj.real_pts_tmax = real
+            if st.button("🚀 擬合 IGBT"):
+                cur = st.session_state.igbt_obj.real_pts_tmin if is_min else st.session_state.igbt_obj.real_pts_tmax
+                vd, id = np.array([p[0] for p in cur]), np.array([p[1] for p in cur])
+                z = np.polyfit(id, vd, 1)
+                if is_min: st.session_state.igbt_obj.fit_tmin = [z[1], z[0]]
+                else: st.session_state.igbt_obj.fit_tmax = [z[1], z[0]]
+                st.success(f"IGBT {tm_i} 擬合成功")
+
+st.divider()
+st.header("3️⃣ FWD 導通特性建模 (Method Con1)")
+tm_f = st.radio("FWD 溫度點", [f"{tc1}°C", f"{tc2}°C"], horizontal=True, key="t_f")
+up_f = st.file_uploader("上傳 FWD 圖", type=["png", "jpg"], key="u_f")
+if up_f:
+    img = Image.open(up_f)
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        v = streamlit_image_coordinates(img, key="c_f")
+        if v:
+            p = (v["x"], v["y"])
+            if len(st.session_state.calib_fwd) < 2:
+                if not st.session_state.calib_fwd or p != st.session_state.calib_fwd[-1]:
+                    st.session_state.calib_fwd.append(p); st.rerun()
+            else:
+                target = st.session_state.fwd_obj.raw_pts_tmin if tm_f.startswith(str(tc1)) else st.session_state.fwd_obj.raw_pts_tmax
+                if not target or p != target[-1]: target.append(p)
+    with c2:
+        xm, ym = st.number_input("FWD V Max", 5.0, key="fx"), st.number_input("FWD I Max", 800.0, key="fy")
+        if len(st.session_state.calib_fwd) == 2:
+            p0, pm = st.session_state.calib_fwd
+            sx, sy = xm/(pm[0]-p0[0]), ym/(pm[1]-p0[1])
+            is_min = tm_f.startswith(str(tc1))
+            raw = st.session_state.fwd_obj.raw_pts_tmin if is_min else st.session_state.fwd_obj.raw_pts_tmax
+            real = [((px-p0[0])*sx, (py-p0[1])*sy) for px, py in raw]
+            if is_min: st.session_state.fwd_obj.real_pts_tmin = real
+            else: st.session_state.fwd_obj.real_pts_tmax = real
+            if st.button("🚀 擬合 FWD"):
+                cur = st.session_state.fwd_obj.real_pts_tmin if is_min else st.session_state.fwd_obj.real_pts_tmax
+                vd, id = np.array([p[0] for p in cur]), np.array([p[1] for p in cur])
+                z = np.polyfit(id, vd, 1)
+                if is_min: st.session_state.fwd_obj.fit_tmin = [z[1], z[0]]
+                else: st.session_state.fwd_obj.fit_tmax = [z[1], z[0]]
+                st.success(f"FWD {tm_f} 擬合成功")
 
 # ==========================================
-# 5. 全域分析與 Figure 8 熱疊代 (核心修改區)
+# 5. 可視化與分析器 (對齊與總損耗公式說明)
 # ==========================================
 st.divider()
-st.header("🔍 熱平衡疊代分析 (Thermal Loop Fig. 8)")
+st.header("📊 擬合數據與全域損耗分析")
+
+# A. 圖表可視化
+res_c1, res_c2, res_c3 = st.columns(3)
+with res_c1:
+    st.caption("切換能量擬合 (mJ)")
+    fig_s, ax_s = plt.subplots(figsize=(5,3.5))
+    xi = np.linspace(0, 1000, 100)
+    for n, o in st.session_state.sw_curves.items():
+        if o.params is not None: ax_s.plot(xi, [o.get_val(x) for x in xi], label=n)
+    ax_s.set_xlabel("Current (A)"); ax_s.legend(); st.pyplot(fig_s)
+with res_c2:
+    st.caption("IGBT Vce 擬合")
+    fig_i, ax_i = plt.subplots(figsize=(5,3.5))
+    ii = np.linspace(0, 800, 100)
+    for t, p in [(f"{tc1}°C", st.session_state.igbt_obj.fit_tmin), (f"{tc2}°C", st.session_state.igbt_obj.fit_tmax)]:
+        if p is not None: ax_i.plot(p[0]+p[1]*ii, ii, label=t)
+    ax_i.set_xlabel("Voltage (V)"); ax_i.set_ylabel("Current (A)"); ax_i.legend(); st.pyplot(fig_i)
+with res_c3:
+    st.caption("FWD Vf 擬合")
+    fig_f, ax_f = plt.subplots(figsize=(5,3.5))
+    for t, p in [(f"{tc1}°C", st.session_state.fwd_obj.fit_tmin), (f"{tc2}°C", st.session_state.fwd_obj.fit_tmax)]:
+        if p is not None: ax_f.plot(p[0]+p[1]*ii, ii, label=t)
+    ax_f.set_xlabel("Voltage (V)"); ax_f.set_ylabel("Current (A)"); ax_f.legend(); st.pyplot(fig_f)
+
+st.divider()
+st.subheader("🔍 全域損耗解算器 (Loss Calculator)")
 
 if st.session_state.igbt_obj.fit_tmax and st.session_state.fwd_obj.fit_tmax:
+    # 1. 基礎輸入與熱參數設定
     with st.container():
         input_c1, input_c2, input_c3 = st.columns(3)
-        t_amb = input_c1.number_input("環境溫度 Ta (°C)", value=25.0)
-        r_th_total = input_c2.number_input("總熱阻 Rth_Total (K/W)", value=0.1, step=0.01)
-        epsilon = input_c3.number_input("收斂容許誤差 ε (°C)", value=0.1, step=0.01)
-        
-        c4, c5 = st.columns(2)
-        i_pk = c4.number_input("峰值電流 I_peak (A)", value=400.0)
-        fsw  = c5.number_input("切換頻率 f_sw (Hz)", value=15000.0)
+        tj_init = input_c1.number_input("初始溫度基準 Tj 或 Ta (°C)", value=25.0)
+        i_pk = input_c2.number_input("峰值電流 I_peak (A)", value=400.0)
+        fsw  = input_c3.number_input("切換頻率 f_sw (Hz)", value=15000.0)
     
+    with st.container():
+        th_c1, th_c2, th_c3 = st.columns(3)
+        rth_igbt = th_c1.number_input("IGBT 熱阻 Rth(j-c) (K/W)", value=0.1, step=0.01)
+        rth_fwd = th_c2.number_input("FWD 熱阻 Rth(j-c) (K/W)", value=0.15, step=0.01)
+        epsilon = th_c3.number_input("收斂容許誤差 ε (°C)", value=0.1, step=0.1)
+    
+    # 2. 執行熱反饋疊代循環 (依據論文 Figure 8)
     irms, iavg = i_pk / 2, i_pk / np.pi
-
-    # --- 執行疊代過程 (Figure 8) ---
-    tj_curr = t_amb
+    
+    tj_loop = tj_init
     iteration_history = []
     max_iters = 20
     converged = False
 
-    for i in range(1, max_iters + 1):
-        # 1. 計算當前溫度下的損耗
-        p_sw = 0.0
+    for i in range(max_iters):
+        # 計算當前溫度下的導通損耗
+        pcon_igbt_curr = st.session_state.igbt_obj.calc_pcon(tj_loop, irms, iavg)
+        pcon_fwd_curr = st.session_state.fwd_obj.calc_pcon(tj_loop, irms, iavg)
+        
+        # 計算切換損耗 (假設擬合曲線已包含溫度考量)
+        psw_curr = 0.0
         for n, o in st.session_state.sw_curves.items():
             if o.params is not None:
                 e_avg = np.mean([o.get_val(i_pk * np.sin(t)) for t in np.linspace(0, np.pi, 100)])
-                p_sw += e_avg * fsw * 1e-3
+                psw_curr += e_avg * fsw * 1e-3
         
-        p_con_i = st.session_state.igbt_obj.calc_pcon(tj_curr, irms, iavg)
-        p_con_f = st.session_state.fwd_obj.calc_pcon(tj_curr, irms, iavg)
-        p_total = p_sw + p_con_i + p_con_f
+        ploss_total = pcon_igbt_curr + pcon_fwd_curr + psw_curr
         
-        # 2. 計算新的溫度 (Eq 27)
-        tj_new = p_total * r_th_total + t_amb
+        # 依據方程式 (27) 更新溫度: Tj = Ploss * Rth_total + Ta
+        tj_new = ploss_total * (rth_igbt + rth_fwd) + tj_init
         
         # 紀錄歷史
-        iteration_history.append({"疊代次數": i, "當前 Tj (°C)": round(tj_curr, 4), "預估損耗 (W)": round(p_total, 2), "溫升後 Tj_new (°C)": round(tj_new, 4)})
+        iteration_history.append({
+            "疊代次數": i + 1,
+            "當前 Tj (°C)": f"{tj_loop:.4f}",
+            "總損耗 Ploss (W)": f"{ploss_total:.4f}",
+            "新 Tj_new (°C)": f"{tj_new:.4f}",
+            "溫差 ΔT (°C)": f"{abs(tj_new - tj_loop):.4f}"
+        })
         
-        # 3. 檢查收斂
-        if abs(tj_new - tj_curr) <= epsilon:
-            tj_curr = tj_new
+        # 判斷收斂
+        if abs(tj_new - tj_loop) <= epsilon:
+            tj_loop = tj_new
             converged = True
             break
-        tj_curr = tj_new
+        
+        tj_loop = tj_new
 
-    # --- 展示疊代過程 ---
-    st.subheader("📈 疊代過程紀錄")
+    # 3. 顯示疊代過程與結果
+    st.markdown("---")
+    st.info("🔄 **熱平衡疊代過程 (依據論文 Figure 8 流程)**")
     st.table(pd.DataFrame(iteration_history))
     
-    if converged:
-        st.success(f"✅ 系統已於第 {len(iteration_history)} 次疊代完成平衡。")
-    else:
-        st.error("⚠️ 疊代未收斂，請檢查熱阻或電流是否過高。")
+    if not converged:
+        st.error(f"⚠️ 警告：疊代在 {max_iters} 次內未收斂。請檢查參數或熱阻設定。")
 
-    # --- 最終結果排版 (方程式對齊) ---
-    st.divider()
-    res_m, res_e = st.columns([1, 2.5])
-    res_m.metric("最終平衡 Tj", f"{tj_curr:.2f} °C")
-    res_e.latex(r"T_{j,new} = P_{loss} \cdot R_{th,Total} + T_a")
-    res_e.caption(f"疊代終止條件：|T_{{j,new}} - T_j| \leq {epsilon}")
+    st.markdown("---")
+    info_col1, info_col2 = st.columns([1.5, 1])
+    with info_col1:
+        st.info("💡 **解算參數說明**")
+        st.latex(r"I_{rms} = \frac{I_{peak}}{2}, I_{avg} = \frac{I_{peak}}{\pi}")
+        # 最終係數顯示
+        vx_i, rx_i = st.session_state.igbt_obj.get_eq19_params(tj_loop)
+        vx_f, rx_f = st.session_state.fwd_obj.get_eq19_params(tj_loop)
+        st.caption(f"最終熱平衡溫度 {tj_loop:.2f}°C 下之線性化參數：")
+        st.code(f"IGBT: Vx={vx_i:.4f}V, Rx={rx_i*1000:.4f}mΩ | FWD: Vx={vx_f:.4f}V, Rx={rx_f*1000:.4f}mΩ")
 
+    st.markdown("---")
+    
+    # 最終結果排版
+    with st.container():
+        res_m, res_e = st.columns([1, 2.5])
+        res_m.metric("最終 IGBT 導通損耗", f"{pcon_igbt_curr:.2f} W")
+        res_e.latex(r"P_{con,IGBT} = R_{ce}(T_j) \cdot I_{rms}^2 + V_{ce}(T_j) \cdot I_{avg}")
     st.divider()
-    r_sw_m, r_sw_e = st.columns([1, 2.5])
-    r_sw_m.metric("最終總損耗 (P_loss)", f"{iteration_history[-1]['預估損耗 (W)']} W")
-    r_sw_e.latex(r"P_{loss} = P_{sw} + P_{con,IGBT} + P_{con,FWD}")
+    with st.container():
+        res_m, res_e = st.columns([1, 2.5])
+        res_m.metric("最終 FWD 導通損耗", f"{pcon_fwd_curr:.2f} W")
+        res_e.latex(r"P_{con,FWD} = R_{f}(T_j) \cdot I_{rms}^2 + V_{f}(T_j) \cdot I_{avg}")
+    st.divider()
+    with st.container():
+        res_m, res_e = st.columns([1, 2.5])
+        res_m.metric("總切換損耗 (P_sw)", f"{psw_curr:.2f} W")
+        res_e.latex(r"P_{sw} = \left( \frac{1}{\pi} \int_{0}^{\pi} E_{sw}(i(\theta)) d\theta \right) \cdot f_{sw}")
+    
+    st.markdown("---")
+    # 總結區：呈現最終溫度與損耗
+    res_m_total, res_e_total = st.columns([1, 2.5])
+    res_m_total.success(f"### **⚡ 熱平衡總損耗: {ploss_total:.2f} W**")
+    res_m_total.metric("最終平衡溫度 Tj", f"{tj_loop:.2f} °C")
+    
+    res_e_total.latex(r"T_j = P_{loss} \cdot (R_{th,IGBT} + R_{th,FWD}) + T_a \quad (Eq 27)")
+    res_e_total.markdown("**熱反饋邏輯說明**：系統透過疊代法解算電力與熱力的耦合關係，直到接面溫度趨於穩定。")
     
 else:
-    st.info("💡 請完成導通特性擬合 (Tmin 與 Tmax) 以啟用熱平衡疊代功能。")
+    st.info("💡 請先完成導通特性擬合 (Tmin 與 Tmax) 後，分析器將自動開啟。")
